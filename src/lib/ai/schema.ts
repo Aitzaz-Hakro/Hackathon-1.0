@@ -28,6 +28,7 @@ export const extractionSchema = z.object({
     .catch([]),
   needsClarification: z.boolean().catch(false),
   clarificationQuestion: z.string().max(300).nullable().catch(null),
+  assistantMessage: z.string().trim().max(400).catch(""),
 });
 
 export type AssistantExtraction = z.infer<typeof extractionSchema>;
@@ -68,6 +69,11 @@ export const responseJsonSchema = {
       type: ["string", "null"],
       description: "One short question when needsClarification is true, otherwise null.",
     },
+    assistantMessage: {
+      type: "string",
+      description:
+        "One or two friendly sentences replying to the user about THIS message — what you understood or, for a refinement, exactly what changed. Always set.",
+    },
   },
   required: [
     "labHint",
@@ -79,6 +85,7 @@ export const responseJsonSchema = {
     "equipment",
     "needsClarification",
     "clarificationQuestion",
+    "assistantMessage",
   ],
 } as const;
 
@@ -124,6 +131,7 @@ export function buildPrompt(input: {
     '- purpose is a short summary of the stated reason (3-200 characters). If none is stated, use "Lab session".',
     "- Only set needsClarification true when the lab/resource or the date/time truly cannot be inferred; then ask one short question and leave the unclear fields null. If only a specific equipment item cannot be matched, do not ask a question — omit it from the list and keep the rest.",
     "- Never invent labs, equipment, dates or times.",
+    "- assistantMessage always replies conversationally in 1-2 sentences: confirm what you understood, or for a refinement acknowledge exactly what changed (e.g. \"Moved it to next Friday, same 2-4pm.\"). Never say it is booked — it is a request. If a weekday is named, it must match the date field exactly; when unsure, name the date instead.",
     ...(input.previous
       ? [
           "- The new message is a refinement: keep every field the new message does not change.",
@@ -183,5 +191,6 @@ export type AssistantResult = {
   unmatchedEquipment: AssistantUnmatchedEquipment[];
   needsClarification: boolean;
   clarificationQuestion: string | null;
+  assistantMessage: string;
   wizardUrl: string | null;
 };

@@ -9,8 +9,10 @@ import { AssistantUnavailableError, callGemini } from "./gemini";
 import { resolveEquipment, resolveLab } from "./resolve";
 import {
   buildPrompt,
+  DATE_RE,
   extractionSchema,
   type AssistantEquipmentLine,
+  type AssistantExtraction,
   type AssistantResult,
   type AssistantUnmatchedEquipment,
   type PreviousIntent,
@@ -160,6 +162,10 @@ export async function parseBookingRequest(
       unmatchedEquipment,
       needsClarification: extraction.needsClarification,
       clarificationQuestion: extraction.clarificationQuestion,
+      assistantMessage: fixWeekday(
+        extraction.assistantMessage || defaultMessage(extraction),
+        extraction.date,
+      ),
       wizardUrl,
     } satisfies AssistantResult);
   } catch (error) {
@@ -168,6 +174,70 @@ export async function parseBookingRequest(
     }
     return toActionFailure(error, "The assistant hit a snag — use the booking form instead.");
   }
+}
+
+const WEEKDAYS_LONG = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
+const WEEKDAY_ALIASES: Record<string, string> = {
+  sun: "Sunday",
+  sunday: "Sunday",
+  mon: "Monday",
+  monday: "Monday",
+  tue: "Tuesday",
+  tues: "Tuesday",
+  tuesday: "Tuesday",
+  wed: "Wednesday",
+  wednesday: "Wednesday",
+  thu: "Thursday",
+  thur: "Thursday",
+  thurs: "Thursday",
+  thursday: "Thursday",
+  fri: "Friday",
+  friday: "Friday",
+  sat: "Saturday",
+  saturday: "Saturday",
+};
+
+/**
+ * The model reliably gets the date right in the structured fields but can
+ * mislabel the weekday in free text. Correct any weekday mention to match the
+ * final date — deterministic, so the chat bubble can be trusted in a demo.
+ */
+function fixWeekday(message: string, date: string | null): string {
+  if (!date || !DATE_RE.test(date)) return message;
+  const correct = WEEKDAYS_LONG[new Date(`${date}T00:00:00Z`).getUTCDay()];
+  return message.replace(
+    /\b(Sun(day)?|Mon(day)?|Tue(s(day)?)?|Wed(nesday)?|Thu(r(s(day)?)?)?|Fri(day)?|Sat(urday)?)\b/gi,
+    (match) => {
+      const canonical = WEEKDAY_ALIASES[match.toLowerCase()];
+      if (!canonical || canonical === correct) return match;
+      return correct;
+    },
+  );
+}
+
+function defaultMessage(extraction: AssistantExtraction): string {
+  const bits: string[] = [];
+  if (extraction.labHint) bits.push(extraction.labHint);
+  if (extraction.date) {
+    bits.push(
+      `${extraction.date}${extraction.start ? ` ${extraction.start}${extraction.end ? `–${extraction.end}` : ""}` : ""}`,
+    );
+  }
+  if (extraction.equipment.length > 0) {
+    bits.push(extraction.equipment.map((line) => `${line.quantity}× ${line.nameHint}`).join(", "));
+  }
+  return bits.length > 0
+    ? `Got it — ${bits.join(" · ")}. Checking availability now.`
+    : "Got it — let me check what fits.";
 }
 
 function sanitizePrevious(previous: PreviousIntent | null | undefined): PreviousIntent | null {

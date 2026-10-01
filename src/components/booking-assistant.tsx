@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { CircleCheck, Loader2, Sparkles, TriangleAlert } from "lucide-react";
 
@@ -39,6 +39,8 @@ type Selection = {
   equipment: { equipmentId: string; quantity: number }[];
 };
 
+type ChatMessage = { id: number; role: "user" | "assistant"; text: string };
+
 const EXAMPLES = [
   "Book the Embedded Systems Lab Friday 2-4pm for 5 Arduino kits — capstone demo",
   "Networking lab next Tuesday 10am to noon for a security workshop",
@@ -50,12 +52,15 @@ const QUICK_REFINEMENTS = ["Make it 2 hours", "Same time next week"];
 export function BookingAssistant() {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
-  const [refineText, setRefineText] = useState("");
+  const [command, setCommand] = useState("");
   const [pending, startTransition] = useTransition();
   const [data, setData] = useState<AssistantResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messageId = useRef(0);
+  const endRef = useRef<HTMLDivElement | null>(null);
+
   const [clarifyAnswered, setClarifyAnswered] = useState(false);
   const [clarifyDate, setClarifyDate] = useState("");
   const [clarifyStart, setClarifyStart] = useState("10:00");
@@ -65,9 +70,16 @@ export function BookingAssistant() {
   const [liveEquipment, setLiveEquipment] = useState<EquipmentCheckData | null>(null);
   const [checking, startCheck] = useTransition();
 
+  function pushMessage(role: "user" | "assistant", text: string) {
+    setMessages((current) => [...current, { id: messageId.current++, role, text }]);
+  }
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, pending, data]);
+
   function applyResult(result: AssistantResult) {
     setData(result);
-    setError(null);
     setClarifyAnswered(false);
 
     const map: Record<string, string> = {};
@@ -94,17 +106,33 @@ export function BookingAssistant() {
     });
   }
 
+  function reset() {
+    setData(null);
+    setSelection(null);
+    setMessages([]);
+    setText("");
+    setCommand("");
+    setLive(null);
+    setLiveEquipment(null);
+    setClarifyAnswered(false);
+  }
+
   function parse() {
     const request = text.trim();
     if (request.length < 3 || pending) return;
+    pushMessage("user", request);
     startTransition(async () => {
       const result = await parseBookingRequest(request);
-      if (result.ok && result.data) applyResult(result.data);
-      else setError(result.error ?? "The assistant could not handle that.");
+      if (result.ok && result.data) {
+        applyResult(result.data);
+        pushMessage("assistant", result.data.assistantMessage);
+      } else {
+        pushMessage("assistant", result.error ?? "Sorry — I could not handle that. Try rephrasing.");
+      }
     });
   }
 
-  function refine(instruction: string) {
+  function runCommand(instruction: string) {
     const request = instruction.trim();
     if (!request || !selection || pending) return;
 
@@ -121,11 +149,16 @@ export function BookingAssistant() {
       })),
     };
 
-    setRefineText("");
+    setCommand("");
+    pushMessage("user", request);
     startTransition(async () => {
       const result = await parseBookingRequest(request, previous);
-      if (result.ok && result.data) applyResult(result.data);
-      else setError(result.error ?? "Could not refine that — try rephrasing.");
+      if (result.ok && result.data) {
+        applyResult(result.data);
+        pushMessage("assistant", result.data.assistantMessage);
+      } else {
+        pushMessage("assistant", result.error ?? "Could not do that — try rephrasing.");
+      }
     });
   }
 
@@ -191,11 +224,19 @@ export function BookingAssistant() {
       current ? { ...current, date: slot.date, start: slot.start, end: slot.end } : current,
     );
     setClarifyAnswered(true);
+    pushMessage("user", `Use ${formatDay(slot.date)} · ${formatTimeRange(slot.start, slot.end)}`);
+    pushMessage(
+      "assistant",
+      `Moved to ${formatDay(slot.date)} · ${formatTimeRange(slot.start, slot.end)} — re-checking availability…`,
+    );
   }
 
   function chooseLab(id: string) {
     setSelection((current) => (current ? { ...current, labId: id } : current));
     setClarifyAnswered(true);
+    const name = names[id] ?? "that lab";
+    pushMessage("user", `Use ${name}`);
+    pushMessage("assistant", `Switched to ${name} — re-checking…`);
   }
 
   function addEquipment(candidate: { id: string; name: string }) {
@@ -211,6 +252,8 @@ export function BookingAssistant() {
         : current,
     );
     setNames((current) => ({ ...current, [candidate.id]: candidate.name }));
+    pushMessage("user", `Add ${candidate.name}`);
+    pushMessage("assistant", `Added ${candidate.name} — checking availability…`);
   }
 
   function setQuantity(equipmentId: string, quantity: number) {
@@ -224,6 +267,9 @@ export function BookingAssistant() {
           }
         : current,
     );
+    const name = names[equipmentId] ?? "the item";
+    pushMessage("user", `Use ${quantity} of ${name}`);
+    pushMessage("assistant", `Done — ${name} is set to ${quantity}.`);
   }
 
   function applyClarifyTimes() {
@@ -231,11 +277,11 @@ export function BookingAssistant() {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(clarifyStart) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(clarifyEnd)) return;
     if (clarifyStart >= clarifyEnd) return;
     setSelection((current) =>
-      current
-        ? { ...current, date: clarifyDate, start: clarifyStart, end: clarifyEnd }
-        : current,
+      current ? { ...current, date: clarifyDate, start: clarifyStart, end: clarifyEnd } : current,
     );
     setClarifyAnswered(true);
+    pushMessage("user", `Use ${formatDay(clarifyDate)} · ${clarifyStart}–${clarifyEnd}`);
+    pushMessage("assistant", `Got it — checking ${formatDay(clarifyDate)} · ${clarifyStart}–${clarifyEnd}.`);
   }
 
   const wizardUrl = useMemo(() => {
@@ -276,59 +322,81 @@ export function BookingAssistant() {
         </SheetHeader>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="assistant-request">Your request</Label>
-            <Textarea
-              id="assistant-request"
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              placeholder="Book the Embedded Systems Lab Friday 2-4pm for 5 Arduino kits — capstone demo"
-              rows={3}
-              maxLength={400}
-            />
-          </div>
-          <Button onClick={parse} disabled={pending || text.trim().length < 3} className="w-full">
-            {pending ? (
-              <>
-                <Loader2 className="size-4 animate-spin" aria-hidden />
-                Working…
-              </>
-            ) : data ? (
-              "Start over"
-            ) : (
-              "Parse request"
-            )}
-          </Button>
-
-          {!data && !pending ? (
-            <div className="flex flex-wrap gap-1.5">
-              {EXAMPLES.map((example) => (
-                <button
-                  key={example}
-                  type="button"
-                  onClick={() => setText(example)}
-                  className="rounded-full border border-border bg-card px-2.5 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-                >
-                  {example.length > 48 ? `${example.slice(0, 48)}…` : example}
-                </button>
-              ))}
-            </div>
+          {!data ? (
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="assistant-request">Your request</Label>
+                <Textarea
+                  id="assistant-request"
+                  value={text}
+                  onChange={(event) => setText(event.target.value)}
+                  placeholder="Book the Embedded Systems Lab Friday 2-4pm for 5 Arduino kits — capstone demo"
+                  rows={3}
+                  maxLength={400}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      parse();
+                    }
+                  }}
+                />
+              </div>
+              <Button onClick={parse} disabled={pending || text.trim().length < 3} className="w-full">
+                {pending ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                    Thinking…
+                  </>
+                ) : (
+                  "Parse request"
+                )}
+              </Button>
+              <div className="flex flex-wrap gap-1.5">
+                {EXAMPLES.map((example) => (
+                  <button
+                    key={example}
+                    type="button"
+                    onClick={() => setText(example)}
+                    className="rounded-full border border-border bg-card px-2.5 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                  >
+                    {example.length > 48 ? `${example.slice(0, 48)}…` : example}
+                  </button>
+                ))}
+              </div>
+            </>
           ) : null}
 
-          {error ? (
-            <p
-              role="alert"
-              className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}
             >
-              {error}
-            </p>
+              <p
+                className={cn(
+                  "max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap",
+                  message.role === "user"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-foreground",
+                )}
+              >
+                {message.text}
+              </p>
+            </div>
+          ))}
+
+          {pending ? (
+            <div className="flex justify-start">
+              <p className="flex items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-sm text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                Thinking…
+              </p>
+            </div>
           ) : null}
 
           {data && selection ? (
             <div className="space-y-3">
               {showClarification ? (
                 <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs">
-                  <p className="font-medium text-warning">Need a bit more detail</p>
                   <p className="text-muted-foreground">
                     {data.clarificationQuestion ?? "Which resource, and when would you like it?"}
                   </p>
@@ -404,7 +472,7 @@ export function BookingAssistant() {
                             ? formatTimeRange(selection.start, selection.end)
                             : "time TBD"
                         }`
-                      : "Date not set — pick one below"}
+                      : "Date not set"}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {selection.purpose}
@@ -535,47 +603,6 @@ export function BookingAssistant() {
                   );
                 })}
 
-                <div className="space-y-2 border-t border-border pt-3">
-                  <Label htmlFor="assistant-refine" className="text-xs">
-                    Refine it
-                  </Label>
-                  <div className="flex gap-2">
-                    <Input
-                      id="assistant-refine"
-                      value={refineText}
-                      onChange={(event) => setRefineText(event.target.value)}
-                      placeholder="e.g. make it 2 hours, same time next week"
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          refine(refineText);
-                        }
-                      }}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={pending || refineText.trim().length < 3}
-                      onClick={() => refine(refineText)}
-                    >
-                      Refine
-                    </Button>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {QUICK_REFINEMENTS.map((chip) => (
-                      <button
-                        key={chip}
-                        type="button"
-                        disabled={pending}
-                        onClick={() => refine(chip)}
-                        className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
-                      >
-                        {chip}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
                 {wizardUrl ? (
                   <Button render={<Link href={wizardUrl} onClick={() => setOpen(false)} />} className="w-full">
                     Open booking wizard
@@ -589,7 +616,56 @@ export function BookingAssistant() {
               </div>
             </div>
           ) : null}
+
+          <div ref={endRef} />
         </div>
+
+        {data ? (
+          <div className="space-y-2 border-t border-border p-3">
+            <div className="flex gap-2">
+              <Input
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+                placeholder="Ask for a change… e.g. same time next week"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    runCommand(command);
+                  }
+                }}
+              />
+              <Button
+                size="sm"
+                disabled={pending || command.trim().length < 3}
+                onClick={() => runCommand(command)}
+              >
+                Send
+              </Button>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-1">
+                {QUICK_REFINEMENTS.map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    disabled={pending}
+                    onClick={() => runCommand(chip)}
+                    className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={reset}
+                className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Start over
+              </button>
+            </div>
+          </div>
+        ) : null}
       </SheetContent>
     </Sheet>
   );
