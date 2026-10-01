@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { BookingAssistant } from "@/components/booking-assistant";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { requireUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
@@ -46,8 +47,10 @@ export default async function NewBookingPage({
       <PageHeader
         title="New booking"
         description="Pick a resource, choose a time, and the system checks availability before you submit."
+        actions={<BookingAssistant />}
       />
       <BookingWizard
+        key={`${params.lab ?? ""}:${params.equipment ?? ""}`}
         labs={labs ?? []}
         equipment={equipmentOptions}
         initialLabId={params.lab ?? null}
