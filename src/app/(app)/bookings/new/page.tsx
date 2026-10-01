@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { BookingAssistant } from "@/components/booking-assistant";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { requireUser } from "@/lib/auth";
+import { decodeBookingIntent } from "@/lib/booking/intent";
 import { createClient } from "@/lib/supabase/server";
 
 import { BookingWizard } from "./booking-wizard";
@@ -12,10 +13,11 @@ export const metadata: Metadata = { title: "New booking" };
 export default async function NewBookingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ lab?: string; equipment?: string }>;
+  searchParams: Promise<{ lab?: string; equipment?: string; intent?: string }>;
 }) {
   await requireUser();
   const params = await searchParams;
+  const intent = decodeBookingIntent(params.intent);
   const supabase = await createClient();
 
   const [{ data: labs }, { data: equipment }, { data: categories }] = await Promise.all([
@@ -50,11 +52,12 @@ export default async function NewBookingPage({
         actions={<BookingAssistant />}
       />
       <BookingWizard
-        key={`${params.lab ?? ""}:${params.equipment ?? ""}`}
+        key={`${params.lab ?? ""}:${params.equipment ?? ""}:${params.intent ?? ""}`}
         labs={labs ?? []}
         equipment={equipmentOptions}
         initialLabId={params.lab ?? null}
         initialEquipmentId={params.equipment ?? null}
+        initialIntent={intent}
       />
     </PageBody>
   );

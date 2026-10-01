@@ -85,12 +85,23 @@ export const responseJsonSchema = {
 export type PromptLab = { name: string; code: string; capacity: number };
 export type PromptEquipment = { name: string; categoryName: string };
 
+export type PreviousIntent = {
+  lab: string | null;
+  date: string | null;
+  start: string | null;
+  end: string | null;
+  purpose: string;
+  attendees: number | null;
+  equipment: { name: string; quantity: number }[];
+};
+
 export function buildPrompt(input: {
   text: string;
   today: string;
   weekday: string;
   labs: PromptLab[];
   equipment: PromptEquipment[];
+  previous?: PreviousIntent | null;
 }): string {
   const labLines = input.labs.map((lab) => `- ${lab.name} (code ${lab.code}, ${lab.capacity} seats)`).join("\n");
   const equipmentLines = input.equipment.map((item) => `- ${item.name} (${item.categoryName})`).join("\n");
@@ -113,6 +124,14 @@ export function buildPrompt(input: {
     '- purpose is a short summary of the stated reason (3-200 characters). If none is stated, use "Lab session".',
     "- Only set needsClarification true when the lab/resource or the date/time truly cannot be inferred; then ask one short question and leave the unclear fields null. If only a specific equipment item cannot be matched, do not ask a question — omit it from the list and keep the rest.",
     "- Never invent labs, equipment, dates or times.",
+    ...(input.previous
+      ? [
+          "- The new message is a refinement: keep every field the new message does not change.",
+          "",
+          "Previous request (already agreed):",
+          JSON.stringify(input.previous),
+        ]
+      : []),
     "",
     `User request: """${input.text}"""`,
   ].join("\n");
@@ -143,9 +162,13 @@ export type AssistantEquipmentLine = {
   message: string;
 };
 
+export type AssistantEquipmentCandidate = { id: string; name: string; available: number };
+export type AssistantUnmatchedEquipment = { hint: string; candidates: AssistantEquipmentCandidate[] };
+
 export type AssistantResult = {
   lab: AssistantLabOption | null;
   labCandidates: AssistantLabOption[];
+  labDirectory: AssistantLabOption[];
   date: string | null;
   start: string | null;
   end: string | null;
@@ -157,7 +180,7 @@ export type AssistantResult = {
   alternatives: AssistantSlot[];
   ranked: AssistantRankedLab[];
   equipment: AssistantEquipmentLine[];
-  unmatchedEquipment: string[];
+  unmatchedEquipment: AssistantUnmatchedEquipment[];
   needsClarification: boolean;
   clarificationQuestion: string | null;
   wizardUrl: string | null;

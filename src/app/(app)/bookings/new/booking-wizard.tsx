@@ -31,6 +31,7 @@ import {
   type EquipmentCheckData,
 } from "@/lib/actions/bookings";
 import { addDays } from "@/lib/booking/availability";
+import type { BookingIntent } from "@/lib/booking/intent";
 import { formatDay } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,20 @@ type Line = { equipmentId: string; quantity: number };
 
 const BLOCKED_MAINTENANCE = ["under_maintenance", "out_of_service"];
 
+const INTENT_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const INTENT_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** Keeps only intent equipment lines whose IDs actually exist in the loaded options. */
+function intentLinesFor(equipment: EquipmentOption[], intent: BookingIntent | null | undefined): Line[] {
+  return (intent?.equipment ?? [])
+    .filter((line) => line && equipment.some((item) => item.id === line.id))
+    .map((line) => ({
+      equipmentId: line.id,
+      quantity: Math.min(Math.max(Math.trunc(Number(line.quantity)) || 1, 1), 100),
+    }))
+    .slice(0, 20);
+}
+
 const STEPS = [
   { label: "Select resource", icon: FlaskConical },
   { label: "Pick time", icon: CalendarClock },
@@ -73,6 +88,7 @@ type BookingWizardProps = {
   equipment: EquipmentOption[];
   initialLabId: string | null;
   initialEquipmentId: string | null;
+  initialIntent?: BookingIntent | null;
 };
 
 /**
@@ -91,22 +107,44 @@ function WizardForm({
   equipment,
   initialLabId,
   initialEquipmentId,
+  initialIntent,
   onBookAnother,
 }: BookingWizardProps & { onBookAnother: () => void }) {
-  const [mode, setMode] = useState<"lab" | "equipment">(
-    initialEquipmentId && !initialLabId ? "equipment" : "lab",
-  );
+  const intentLabId =
+    initialIntent?.lab && labs.some((lab) => lab.id === initialIntent.lab) ? initialIntent.lab : null;
+  const intentLines = intentLinesFor(equipment, initialIntent);
+  const intentDate =
+    initialIntent?.date && INTENT_DATE_RE.test(initialIntent.date) ? initialIntent.date : null;
+  const intentStart =
+    initialIntent?.start && INTENT_TIME_RE.test(initialIntent.start) ? initialIntent.start : null;
+  const intentEnd = initialIntent?.end && INTENT_TIME_RE.test(initialIntent.end) ? initialIntent.end : null;
+  const intentPurpose = initialIntent?.purpose?.trim().slice(0, 500) ?? "";
+  const intentAttendees =
+    typeof initialIntent?.attendees === "number" && Number.isFinite(initialIntent.attendees)
+      ? Math.min(Math.max(Math.trunc(initialIntent.attendees), 1), 500)
+      : null;
+
+  const [mode, setMode] = useState<"lab" | "equipment">(() => {
+    const hasLab = Boolean(intentLabId) || Boolean(initialLabId && labs.some((lab) => lab.id === initialLabId));
+    const hasEquipment = intentLines.length > 0 || Boolean(initialEquipmentId);
+    return hasEquipment && !hasLab ? "equipment" : "lab";
+  });
   const [labId, setLabId] = useState<string | null>(() => {
+    if (intentLabId) return intentLabId;
     if (initialLabId && labs.some((lab) => lab.id === initialLabId)) return initialLabId;
     return labs[0]?.id ?? null;
   });
-  const [date, setDate] = useState(() => addDays(new Date().toISOString().slice(0, 10), 1));
-  const [start, setStart] = useState("09:00");
-  const [end, setEnd] = useState("11:00");
-  const [attendees, setAttendees] = useState(5);
-  const [purpose, setPurpose] = useState("");
+  const [date, setDate] = useState(() => intentDate ?? addDays(new Date().toISOString().slice(0, 10), 1));
+  const [start, setStart] = useState(() => intentStart ?? "09:00");
+  const [end, setEnd] = useState(() => intentEnd ?? "11:00");
+  const [attendees, setAttendees] = useState(() => intentAttendees ?? 5);
+  const [purpose, setPurpose] = useState(() => intentPurpose);
   const [lines, setLines] = useState<Line[]>(() =>
-    initialEquipmentId ? [{ equipmentId: initialEquipmentId, quantity: 1 }] : [],
+    intentLines.length > 0
+      ? intentLines
+      : initialEquipmentId
+        ? [{ equipmentId: initialEquipmentId, quantity: 1 }]
+        : [],
   );
   const [equipmentQuery, setEquipmentQuery] = useState("");
 

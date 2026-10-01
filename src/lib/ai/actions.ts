@@ -12,11 +12,16 @@ import {
   extractionSchema,
   type AssistantEquipmentLine,
   type AssistantResult,
+  type AssistantUnmatchedEquipment,
+  type PreviousIntent,
 } from "./schema";
 
 const MAX_INPUT = 400;
 
-export async function parseBookingRequest(text: string): Promise<ActionResult<AssistantResult>> {
+export async function parseBookingRequest(
+  text: string,
+  previous?: PreviousIntent | null,
+): Promise<ActionResult<AssistantResult>> {
   try {
     await assertRole(ALL_ROLES);
 
@@ -60,6 +65,7 @@ export async function parseBookingRequest(text: string): Promise<ActionResult<As
         weekday,
         labs: labOptions.map((lab) => ({ name: lab.name, code: lab.code, capacity: lab.capacity })),
         equipment: equipmentOptions.map((item) => ({ name: item.name, categoryName: item.categoryName })),
+        previous: sanitizePrevious(previous),
       }),
     );
 
@@ -77,13 +83,20 @@ export async function parseBookingRequest(text: string): Promise<ActionResult<As
     const labResolution = resolveLab(extraction.labHint, labOptions);
 
     const equipmentMatches: { equipmentId: string; quantity: number }[] = [];
-    const unmatchedEquipment: string[] = [];
+    const unmatchedEquipment: AssistantUnmatchedEquipment[] = [];
     for (const line of extraction.equipment) {
       const resolution = resolveEquipment(line.nameHint, equipmentOptions);
       if (resolution.match) {
         equipmentMatches.push({ equipmentId: resolution.match.id, quantity: line.quantity });
       } else {
-        unmatchedEquipment.push(line.nameHint);
+        unmatchedEquipment.push({
+          hint: line.nameHint,
+          candidates: resolution.candidates.map((candidate) => ({
+            id: candidate.id,
+            name: candidate.name,
+            available: candidate.available,
+          })),
+        });
       }
     }
 
@@ -132,6 +145,7 @@ export async function parseBookingRequest(text: string): Promise<ActionResult<As
     return ok({
       lab: labResolution.match ? { id: labResolution.match.id, name: labResolution.match.name } : null,
       labCandidates: labResolution.candidates.map((lab) => ({ id: lab.id, name: lab.name })),
+      labDirectory: labOptions.map((lab) => ({ id: lab.id, name: lab.name })),
       date: extraction.date,
       start: extraction.start,
       end,
@@ -153,6 +167,16 @@ export async function parseBookingRequest(text: string): Promise<ActionResult<As
       return fail("The AI assistant is unavailable right now — use the booking form instead.", "unknown");
     }
     return toActionFailure(error, "The assistant hit a snag — use the booking form instead.");
+  }
+}
+
+function sanitizePrevious(previous: PreviousIntent | null | undefined): PreviousIntent | null {
+  if (!previous || typeof previous !== "object") return null;
+  try {
+    if (JSON.stringify(previous).length > 1200) return null;
+    return previous;
+  } catch {
+    return null;
   }
 }
 
